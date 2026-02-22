@@ -17,7 +17,6 @@ class GeminiProvider(AIProvider):
     """AI provider using Google Gemini (async via client.aio)."""
 
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = genai.Client(api_key=api_key)
         self._config = types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.3,
@@ -25,8 +24,17 @@ class GeminiProvider(AIProvider):
             system_instruction=PromptBuilder.SYSTEM_PROMPT,
         )
         self.model_name = model
+        if api_key and (isinstance(api_key, str) and api_key.strip()):
+            try:
+                self._client = genai.Client(api_key=api_key)
+            except Exception:
+                self._client = None
+        else:
+            self._client = None
 
     async def get_recommendation(self, context: WorkoutContext) -> AIRecommendation:
+        if self._client is None:
+            raise ValueError("Gemini API key not configured")
         prompt = PromptBuilder.build_recommendation_prompt(context)
         start = time.perf_counter()
 
@@ -79,6 +87,8 @@ class GeminiProvider(AIProvider):
         )
 
     async def health_check(self) -> bool:
+        if self._client is None:
+            return False
         try:
             await self._client.aio.models.generate_content(
                 model=self.model_name,
