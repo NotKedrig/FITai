@@ -20,7 +20,13 @@ def _ensure_async_url(url: str) -> str:
 
 def get_engine() -> AsyncEngine:
     url = _ensure_async_url(settings.DATABASE_URL)
-    return create_async_engine(url, echo=False)
+    return create_async_engine(
+        url,
+        echo=False,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_pre_ping=True,
+    )
 
 
 engine: AsyncEngine = get_engine()

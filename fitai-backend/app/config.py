@@ -7,6 +7,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
+    ENVIRONMENT: str = "development"
+    ALLOWED_ORIGINS: str = "*"
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+
     DATABASE_URL: str
     REDIS_URL: Optional[str] = None
     SECRET_KEY: str
