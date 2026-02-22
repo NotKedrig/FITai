@@ -11,8 +11,16 @@ settings = get_settings()
 Base = declarative_base()
 
 
+def _ensure_async_url(url: str) -> str:
+    """Ensure DATABASE_URL uses postgresql+asyncpg for async engine."""
+    if url.startswith("postgresql://") and "postgresql+asyncpg" not in url:
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
 def get_engine() -> AsyncEngine:
-    return create_async_engine(settings.DATABASE_URL, echo=False)
+    url = _ensure_async_url(settings.DATABASE_URL)
+    return create_async_engine(url, echo=False)
 
 
 engine: AsyncEngine = get_engine()

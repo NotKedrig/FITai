@@ -2,15 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from logging.config import fileConfig
 from typing import Any
+
+# Add /app to Python path to ensure app module can be imported
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.models import Base  # imports all models and Base
+# Import Base directly and ensure all models are loaded
+from app.db.database import Base
+# Import all models to register them with Base.metadata
+from app.models.user import User  # noqa: F401
+from app.models.exercise import Exercise  # noqa: F401
+from app.models.workout import Workout  # noqa: F401
+from app.models.set import Set  # noqa: F401
+from app.models.recommendation import Recommendation  # noqa: F401
 
 
 config = context.config

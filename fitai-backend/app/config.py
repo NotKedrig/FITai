@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[str] = None
     SECRET_KEY: str
 
+    # JWT settings
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
     AI_PROVIDER: str = "gemini"
 
     GEMINI_API_KEY: Optional[str] = None

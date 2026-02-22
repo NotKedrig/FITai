@@ -7,6 +7,7 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app/app
+      - ./scripts:/app/scripts
     env_file:
       - .env
     depends_on:
@@ -17,6 +18,8 @@ services:
 
   db:
     image: postgres:16-alpine
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: fitai
       POSTGRES_PASSWORD: fitai

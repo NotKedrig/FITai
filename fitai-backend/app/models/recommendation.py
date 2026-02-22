@@ -44,6 +44,7 @@ class Recommendation(Base):
     recommended_weight: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     recommended_reps: Mapped[int] = mapped_column(Integer, nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[str] = mapped_column(String(10), nullable=False, server_default=text("'medium'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False)
     model_used: Mapped[str] = mapped_column(String(50), nullable=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)

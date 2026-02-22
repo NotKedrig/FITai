@@ -1,9 +1,49 @@
+# Python
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
+
+# Virtual environments
 .venv/
-.idea/
+venv/
+env/
+
+# Environment variables (CRITICAL)
+.env
+.env.*
+!.env.example
+
+# IDE
 .vscode/
+.idea/
+
+# Type checker / testing
 .mypy_cache/
 .pytest_cache/
+.coverage
+htmlcov/
 
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.sqlite3
+postgres_data/
+
+# Docker
+*.tar
+
+# Cursor
+.cursor/
+
+# Future frontend
+node_modules/
+dist/
+build/
+
+# Git
+.gitignore
