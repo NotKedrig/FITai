@@ -12,9 +12,14 @@ Base = declarative_base()
 
 
 def _ensure_async_url(url: str) -> str:
-    """Ensure DATABASE_URL uses postgresql+asyncpg for async engine."""
-    if url.startswith("postgresql://") and "postgresql+asyncpg" not in url:
+    """Ensure DATABASE_URL uses postgresql+asyncpg for async engine.
+    Handles postgres:// (Railway/default) and postgresql://."""
+    if "postgresql+asyncpg" in url:
+        return url
+    if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[11:]  # postgres:// -> postgresql+asyncpg://
     return url
 
 

@@ -10,4 +10,4 @@ class OllamaProvider(AIProvider):
         raise NotImplementedError("Ollama provider — activate on GPU machine.")
 
     async def health_check(self) -> bool:
-        raise NotImplementedError("Ollama provider — activate on GPU machine.")
+        return False  # Not implemented; fail gracefully for health checks.

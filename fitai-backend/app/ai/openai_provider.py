@@ -10,4 +10,4 @@ class OpenAIProvider(AIProvider):
         raise NotImplementedError("OpenAI provider not implemented yet.")
 
     async def health_check(self) -> bool:
-        raise NotImplementedError("OpenAI provider not implemented yet.")
+        return False  # Not implemented; fail gracefully for health checks.

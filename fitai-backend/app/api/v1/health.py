@@ -42,7 +42,8 @@ async def health(
         logger.warning("Health check AI failed: %s", e)
 
     overall = "ok" if (db_status == "ok" and ai_status == "ok") else "degraded"
-    status_code = 200 if overall == "ok" else 503
+    # 503 only when DB fails (app unusable). 200 when DB ok (degraded if AI fails).
+    status_code = 503 if db_status != "ok" else 200
 
     return JSONResponse(
         content={"status": overall, "db": db_status, "ai": ai_status},
