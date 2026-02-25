@@ -1,0 +1,101 @@
+# =====================================================
+# OS
+# =====================================================
+.DS_Store
+Thumbs.db
+
+# =====================================================
+# IDE / Editors
+# =====================================================
+.idea/
+.vscode/
+.cursor/
+*.iml
+
+# =====================================================
+# Python (Backend)
+# =====================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Testing / type checking
+.pytest_cache/
+.mypy_cache/
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+
+# =====================================================
+# Node / React Native (Mobile)
+# =====================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Expo
+.expo/
+.expo-shared/
+
+# Expo web build
+web-build/
+
+# Metro
+.metro-cache/
+
+# =====================================================
+# Android
+# =====================================================
+.gradle/
+local.properties
+.cxx/
+*.keystore
+*.jks
+*.hprof
+
+# Android build outputs
+android/build/
+android/app/build/
+
+# =====================================================
+# iOS
+# =====================================================
+ios/build/
+ios/Pods/
+
+# Xcode
+*.xcworkspace
+*.xcuserdata
+
+# =====================================================
+# React Native bundle artifacts
+# =====================================================
+*.jsbundle
+
+# =====================================================
+# Misc
+# =====================================================
+coverage/
+tmp/
+temp/
+
+# =====================================================
+# Git
+# =====================================================
+*.orig
