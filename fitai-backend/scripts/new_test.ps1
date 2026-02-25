@@ -64,7 +64,7 @@ Write-Host "Workout ID: $workoutId" -ForegroundColor Green
 Write-Host "`n=== 4. Get Exercise ===" -ForegroundColor Yellow
 
 $exercises  = Invoke-RestMethod -Uri "$Base/api/v1/exercises" -Method Get -Headers $headers
-$bench      = $exercises | Where-Object { $_.name -eq "Bench Press" } | Select-Object -First 1
+$bench      = $exercises | Where-Object { $_.name -eq "Barbell Bench Press" } | Select-Object -First 1
 
 if (-not $bench) {
     Write-Host "Bench Press not found. Available exercises:" -ForegroundColor Red
