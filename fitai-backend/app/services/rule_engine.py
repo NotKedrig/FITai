@@ -24,6 +24,17 @@ def _round_weight(weight_kg: float) -> float:
     return round(clamped / 1.25) * 1.25
 
 
+def _round_training_weight(weight_kg: float, is_compound: bool) -> float:
+    """Round training weight with compound vs isolation distinction.
+
+    Compound movements round to the nearest 2.5 kg.
+    Isolation movements round to the nearest 1.25 kg.
+    """
+    clamped = max(0.0, weight_kg)
+    increment = 2.5 if is_compound else 1.25
+    return round(clamped / increment) * increment
+
+
 def _get_delta(is_compound: bool) -> float:
     """Return weight delta: 2.5 for compound, 1.25 for isolation."""
     return 2.5 if is_compound else 1.25
@@ -52,13 +63,33 @@ def get_rule_based_recommendation(
     """
     Apply rules in strict priority order. Returns (weight, reps, explanation).
 
-    RPE >= 9 always fires Signal 2 in Rule 1 (fatigue), so Rule 2 never needs
-    a decrease outcome for high RPE; only maintain and increase apply.
+    New progression logic:
+      - Target RPE is 8, with a working band of 7.5–8.5.
+      - A multiplier table maps discrete RPE values to % changes.
+      - Fatigue signals are detected first, but applied AFTER the multiplier:
+          * Hard fatigue (2+ signals): always reduce by a fixed delta.
+          * Soft fatigue (1 signal): cap increases (multiplier > 1.0) to maintain.
     """
     is_compound = ctx.is_compound
     parts: list[str] = []
 
-    # ── RULE 1: Fatigue detection ─────────────────────────────────────────────
+    # Determine whether last set was marked as warmup, if that metadata is present.
+    is_warmup = False
+    if ctx.current_session_sets:
+        last_set = ctx.current_session_sets[-1]
+        is_warmup = bool(last_set.get("is_warmup"))
+
+    # Warmups and unknown RPE: maintain load, no progression logic.
+    if last_rpe is None or is_warmup:
+        suggested_weight = _round_training_weight(last_weight_kg, is_compound)
+        suggested_reps = last_reps
+        parts.append("Warmup or RPE not provided — maintaining load.")
+        suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
+        parts.extend(cap_parts)
+        parts.append(" | Rule-based suggestion.")
+        return (suggested_weight, suggested_reps, " ".join(parts))
+
+    # ── RULE 1: Fatigue detection (signals only; application happens later) ──
     fatigue_signals: list[str] = []
 
     # Signal 1: Rep drop (2+ sets, drop >= 3)
@@ -89,52 +120,66 @@ def get_rule_based_recommendation(
     soft_fatigue = fatigue_count == 1
     hard_fatigue = fatigue_count >= 2
 
+    # ── RULE 2: RPE-based multiplier ─────────────────────────────────────────
+    target_rpe = 8
+    rpe_deficit = target_rpe - float(last_rpe)
+    _ = rpe_deficit  # kept for potential future tuning
+
+    rpe_for_text = int(last_rpe) if float(last_rpe).is_integer() else last_rpe
+
+    if last_rpe <= 4:
+        multiplier = 1.15
+        parts.append(
+            f"RPE {rpe_for_text} — significantly underloaded, increasing weight by 15%."
+        )
+    elif last_rpe == 5:
+        multiplier = 1.10
+        parts.append(f"RPE {rpe_for_text} — underloaded, increasing by 10%.")
+    elif last_rpe == 6:
+        multiplier = 1.05
+        parts.append(f"RPE {rpe_for_text} — below target, increasing by 5%.")
+    elif last_rpe == 7:
+        multiplier = 1.025
+        parts.append(f"RPE {rpe_for_text} — approaching target, small increase.")
+    elif last_rpe == 8:
+        multiplier = 1.0
+        parts.append(f"RPE {rpe_for_text} — on target. Maintaining load.")
+    elif last_rpe == 9:
+        multiplier = 0.975
+        parts.append(f"RPE {rpe_for_text} — above target, slight reduction.")
+    else:  # last_rpe >= 10
+        multiplier = 0.95
+        parts.append(f"RPE {rpe_for_text} — too close to failure, reducing load.")
+
+    # ── RULE 3: Apply fatigue after multiplier ───────────────────────────────
     if hard_fatigue:
+        # Override multiplier: always reduce by a fixed delta based on exercise type.
         delta = _get_delta(is_compound)
         suggested_weight = last_weight_kg - delta
-        suggested_weight = _round_weight(max(0, suggested_weight))
+        suggested_weight = _round_training_weight(max(0.0, suggested_weight), is_compound)
         suggested_reps = last_reps
-        parts.append(
-            f"{' + '.join(fatigue_signals)}: reducing load by {delta} kg."
-        )
+        parts.append(f"{' + '.join(fatigue_signals)}: reducing load by {delta} kg.")
         suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
         parts.extend(cap_parts)
         parts.append(" | Rule-based suggestion.")
         return (suggested_weight, suggested_reps, " ".join(parts))
 
+    # Soft fatigue: always record the signal, and cap increases if needed.
+    effective_multiplier = multiplier
     if soft_fatigue:
-        suggested_weight = _round_weight(last_weight_kg)
-        suggested_reps = last_reps
         parts.append(fatigue_signals[0])
-        parts.append(" — maintaining load.")
-        suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
-        parts.extend(cap_parts)
-        parts.append(" | Rule-based suggestion.")
-        return (suggested_weight, suggested_reps, " ".join(parts))
+        if effective_multiplier > 1.0:
+            effective_multiplier = 1.0
+            parts.append("— capping at maintain due to fatigue.")
 
-    # No fatigue. Proceed to Rule 2.
+    # Compute base suggestion from effective multiplier.
+    suggested_weight = last_weight_kg * effective_multiplier
+    suggested_weight = _round_training_weight(suggested_weight, is_compound)
+    suggested_reps = last_reps
+
+    # ── RULE 3: Session trend (only if 0 or soft fatigue) ────────────────────
     increase_suppressed = False
 
-    # ── RULE 2: RPE bands ────────────────────────────────────────────────────
-    # RPE >= 9 always fires Signal 2 in Rule 1, so the decrease branch is
-    # unreachable here. Only maintain and increase outcomes apply.
-    if last_rpe is None or 7 <= last_rpe <= 8:
-        suggested_weight = last_weight_kg
-        suggested_reps = last_reps
-        parts.append("RPE 7–8 (or unknown) — maintaining load.")
-    elif last_rpe <= 6:
-        delta = _get_delta(is_compound)
-        suggested_weight = last_weight_kg + delta
-        suggested_reps = last_reps
-        parts.append(f"RPE {int(last_rpe)} — adding {delta} kg ({'compound' if is_compound else 'isolation'}).")
-    else:
-        # last_rpe in (8, 9); RPE >= 9 never reaches here (Signal 2 fires).
-        suggested_weight = last_weight_kg
-        suggested_reps = last_reps
-        parts.append("RPE 7–8 (or unknown) — maintaining load.")
-    suggested_weight = _round_weight(max(0, suggested_weight))
-
-    # ── RULE 3: Session trend (only if 0 fatigue) ─────────────────────────────
     if len(ctx.current_session_sets) >= 2:
         prev = ctx.current_session_sets[-2]
         prev_reps = prev.get("reps")
@@ -146,12 +191,10 @@ def get_rule_based_recommendation(
         trend_declining = rep_drop <= -2 or weight_dropped
         if trend_declining and last_rpe is not None and last_rpe <= 6:
             increase_suppressed = True
-            suggested_weight = _round_weight(last_weight_kg)
+            suggested_weight = _round_training_weight(last_weight_kg, is_compound)
             suggested_reps = last_reps
-            parts = [
-                "Session trend declining — suppressing increase.",
-                f"RPE {int(last_rpe)} noted but overridden.",
-            ]
+            parts.append("Session trend declining — suppressing increase.")
+            parts.append(f"RPE {int(last_rpe)} noted but overridden.")
 
     # ── RULE 4: Recent session comparison ───────────────────────────────────
     if not increase_suppressed and ctx.recent_sessions:
@@ -162,20 +205,19 @@ def get_rule_based_recommendation(
             )
             if last_weight_kg < best_prior_weight and last_rpe is not None and last_rpe <= 6:
                 increase_suppressed = True
-                suggested_weight = _round_weight(last_weight_kg)
+                suggested_weight = _round_training_weight(last_weight_kg, is_compound)
                 suggested_reps = last_reps
-                parts = [
-                    "Current weight below prior session best — suppressing increase.",
-                ]
-
-    # If Rule 3 or 4 overrode, parts is already set. Otherwise keep Rule 2 parts.
-    # (parts was set in Rule 2, so we're good unless we overwrote)
+                parts.append(
+                    "Current weight below prior session best — suppressing increase."
+                )
 
     # ── RULE 5: 1RM cap ─────────────────────────────────────────────────────
     suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
     parts.extend(cap_parts)
     parts.append(" | Rule-based suggestion.")
-    return (_round_weight(suggested_weight), suggested_reps, " ".join(parts))
+    # Final rounding uses compound/isolation increments.
+    suggested_weight = _round_training_weight(suggested_weight, is_compound)
+    return (suggested_weight, suggested_reps, " ".join(parts))
 
 
 def get_minimal_fallback(

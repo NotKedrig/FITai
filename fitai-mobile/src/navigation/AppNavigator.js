@@ -1,9 +1,10 @@
 import React, { useContext } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { ActivityIndicator, SafeAreaView, StyleSheet, Text, View, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, SafeAreaView, StyleSheet, Text } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import AuthNavigator from './AuthNavigator';
+import HomeNavigator from './HomeNavigator';
 
 const RootStack = createStackNavigator();
 
@@ -12,22 +13,6 @@ function LoadingScreen() {
     <SafeAreaView style={styles.loadingContainer}>
       <ActivityIndicator size="large" color="#6C63FF" />
       <Text style={styles.loadingText}>Loading FitAI...</Text>
-    </SafeAreaView>
-  );
-}
-
-function HomeScreen() {
-  const { logout } = useContext(AuthContext);
-
-  return (
-    <SafeAreaView style={styles.homeContainer}>
-      <View style={styles.homeContent}>
-        <Text style={styles.homeTitle}>FitAI</Text>
-        <Text style={styles.homeSubtitle}>Home - coming soon</Text>
-      </View>
-      <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-        <Text style={styles.logoutButtonText}>Logout</Text>
-      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -47,7 +32,7 @@ export default function AppNavigator() {
     <NavigationContainer>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
         {token ? (
-          <RootStack.Screen name="Home" component={HomeScreen} />
+          <RootStack.Screen name="Home" component={HomeNavigator} />
         ) : (
           <RootStack.Screen name="Auth" component={AuthNavigator} />
         )}
@@ -68,38 +53,4 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
   },
-  homeContainer: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-    paddingHorizontal: 24,
-    paddingTop: 48,
-    paddingBottom: 24,
-    justifyContent: 'space-between',
-  },
-  homeContent: {
-    alignItems: 'center',
-    marginTop: 40,
-  },
-  homeTitle: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 8,
-  },
-  homeSubtitle: {
-    fontSize: 18,
-    color: '#cccccc',
-  },
-  logoutButton: {
-    backgroundColor: '#6C63FF',
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  logoutButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
 });
-
