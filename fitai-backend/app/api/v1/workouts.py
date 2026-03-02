@@ -9,6 +9,7 @@ from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.workout import WorkoutCreate, WorkoutResponse, WorkoutUpdate
+from app.schemas.set import WorkoutExerciseGroup
 from app.services import workout_service
 
 router = APIRouter()
@@ -83,3 +84,21 @@ async def update_workout(
         workout_id, current_user.id, update_in, db
     )
     return WorkoutResponse.model_validate(workout)
+
+
+@router.get(
+    "/{workout_id}/sets",
+    response_model=list[WorkoutExerciseGroup],
+)
+async def get_workout_sets(
+    workout_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[WorkoutExerciseGroup]:
+    """
+    Get all sets for a workout grouped by exercise for the current user.
+    """
+    groups = await workout_service.get_workout_sets_grouped(
+        workout_id, current_user.id, db
+    )
+    return groups

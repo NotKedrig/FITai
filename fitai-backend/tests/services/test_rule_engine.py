@@ -76,6 +76,24 @@ def test_rpe_10_reduces_5_percent() -> None:
     assert reps == 8
 
 
+def test_minimum_effective_change_reduce() -> None:
+    """40kg @ RPE 9 → force minimum -2.5kg due to rounding collapse."""
+    ctx = build_mock_ctx(is_compound=True)
+    weight, reps, expl = get_rule_based_recommendation(ctx, 40.0, 8, 9.0)
+    assert weight == 37.5
+    assert reps == 8
+    assert "Minimum -2.5kg applied." in expl
+
+
+def test_minimum_effective_change_increase() -> None:
+    """35kg @ RPE 7 → force minimum +2.5kg due to rounding collapse."""
+    ctx = build_mock_ctx(is_compound=True)
+    weight, reps, expl = get_rule_based_recommendation(ctx, 35.0, 8, 7.0)
+    assert weight == 37.5
+    assert reps == 8
+    assert "Minimum +2.5kg applied." in expl
+
+
 def test_rpe_none_maintain() -> None:
     """RPE None → weight maintained."""
     ctx = build_mock_ctx(is_compound=True)
@@ -354,6 +372,7 @@ def test_1rm_cap_exceeds_clamped() -> None:
     assert weight == 90.0
     assert reps == 5
     assert "90% estimated 1RM" in expl
+    assert "Attempted increase" in expl or "Attempted change" in expl
 
 
 def test_1rm_cap_below_unchanged() -> None:

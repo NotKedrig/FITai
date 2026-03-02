@@ -10,10 +10,13 @@ import { AuthContext } from "./AuthContext";
 
 export const WorkoutContext = createContext({
   workout: null,
-  sets: [],
+  exercises: [],
+  latestRecommendation: null,
   isLogging: false,
   logSetError: null,
   initWorkout: () => {},
+  addExercise: () => {},
+  restoreWorkout: () => {},
   logSet: async () => {},
   removeSet: async () => {},
   clearWorkout: () => {},
@@ -22,13 +25,50 @@ export const WorkoutContext = createContext({
 export function WorkoutProvider({ children }) {
   const { token } = useContext(AuthContext);
   const [workout, setWorkout] = useState(null);
-  const [sets, setSets] = useState([]);
+  const [exercises, setExercises] = useState([]);
+  const [latestRecommendation, setLatestRecommendation] = useState(null);
   const [isLogging, setIsLogging] = useState(false);
   const [logSetError, setLogSetError] = useState(null);
 
   const initWorkout = useCallback((workoutFromRoute) => {
     setWorkout(workoutFromRoute || null);
-    setSets([]);
+    setExercises([]);
+    setLatestRecommendation(null);
+    setIsLogging(false);
+    setLogSetError(null);
+  }, []);
+
+  const addExercise = useCallback((exercise) => {
+    if (!exercise || !exercise.id) {
+      return;
+    }
+    setExercises((current) => {
+      const exists = current.some(
+        (block) => block.exercise && block.exercise.id === exercise.id,
+      );
+      if (exists) {
+        return current;
+      }
+      return [...current, { exercise, sets: [] }];
+    });
+  }, []);
+
+  const restoreWorkout = useCallback((workoutFromBackend, exerciseGroups) => {
+    setWorkout(workoutFromBackend || null);
+    const nextExercises =
+      Array.isArray(exerciseGroups) && exerciseGroups.length > 0
+        ? exerciseGroups.map((group) => ({
+            exercise: group.exercise,
+            sets: Array.isArray(group.sets)
+              ? group.sets.map((set) => ({
+                  set,
+                  recommendation: null,
+                }))
+              : [],
+          }))
+        : [];
+    setExercises(nextExercises);
+    setLatestRecommendation(null);
     setIsLogging(false);
     setLogSetError(null);
   }, []);
@@ -55,7 +95,33 @@ export function WorkoutProvider({ children }) {
           set: result.set,
           recommendation: result.recommendation || null,
         };
-        setSets((current) => [...current, entry]);
+        setExercises((current) => {
+          let found = false;
+          const updated = current.map((block) => {
+            if (block.exercise && block.exercise.id === exerciseId) {
+              found = true;
+              return {
+                ...block,
+                sets: [...block.sets, entry],
+              };
+            }
+            return block;
+          });
+          if (!found) {
+            return [
+              ...updated,
+              {
+                exercise: { id: exerciseId },
+                sets: [entry],
+              },
+            ];
+          }
+          return updated;
+        });
+
+        if (!isWarmup && result.recommendation) {
+          setLatestRecommendation(result.recommendation);
+        }
       } catch (error) {
         setLogSetError(error.message || "Failed to log set.");
         throw error;
@@ -73,9 +139,19 @@ export function WorkoutProvider({ children }) {
       }
       try {
         await setsApi.deleteSet(token, setId);
-        setSets((current) => current.filter((entry) => entry.set.id !== setId));
+        setExercises((current) => {
+          const updated = current
+            .map((block) => ({
+              ...block,
+              sets: block.sets.filter((entry) => entry.set.id !== setId),
+            }))
+            .filter((block) => block.sets.length > 0);
+          if (updated.length === 0) {
+            setLatestRecommendation(null);
+          }
+          return updated;
+        });
       } catch (error) {
-        // Keep current sets; caller can choose to show error if desired.
         throw error;
       }
     },
@@ -84,7 +160,8 @@ export function WorkoutProvider({ children }) {
 
   const clearWorkout = useCallback(() => {
     setWorkout(null);
-    setSets([]);
+    setExercises([]);
+    setLatestRecommendation(null);
     setIsLogging(false);
     setLogSetError(null);
   }, []);
@@ -92,20 +169,26 @@ export function WorkoutProvider({ children }) {
   const value = useMemo(
     () => ({
       workout,
-      sets,
+      exercises,
+      latestRecommendation,
       isLogging,
       logSetError,
       initWorkout,
+      addExercise,
+      restoreWorkout,
       logSet,
       removeSet,
       clearWorkout,
     }),
     [
       workout,
-      sets,
+      exercises,
+      latestRecommendation,
       isLogging,
       logSetError,
       initWorkout,
+      addExercise,
+      restoreWorkout,
       logSet,
       removeSet,
       clearWorkout,

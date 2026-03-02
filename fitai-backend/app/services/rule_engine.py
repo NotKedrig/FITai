@@ -177,6 +177,20 @@ def get_rule_based_recommendation(
     suggested_weight = _round_training_weight(suggested_weight, is_compound)
     suggested_reps = last_reps
 
+    # ── Minimum effective change to avoid rounding collapse ──────────────────
+    rounded_current = _round_training_weight(last_weight_kg, is_compound)
+    delta = _get_delta(is_compound)
+    if effective_multiplier > 1.0 and suggested_weight == rounded_current:
+        # Force a minimum increase.
+        forced_weight = last_weight_kg + delta
+        suggested_weight = _round_training_weight(forced_weight, is_compound)
+        parts.append(f"Minimum +{delta:g}kg applied.")
+    elif effective_multiplier < 1.0 and suggested_weight == rounded_current:
+        # Force a minimum reduction.
+        forced_weight = last_weight_kg - delta
+        suggested_weight = _round_training_weight(forced_weight, is_compound)
+        parts.append(f"Minimum -{delta:g}kg applied.")
+
     # ── RULE 3: Session trend (only if 0 or soft fatigue) ────────────────────
     increase_suppressed = False
 
@@ -212,8 +226,26 @@ def get_rule_based_recommendation(
                 )
 
     # ── RULE 5: 1RM cap ─────────────────────────────────────────────────────
+    pre_cap_weight = suggested_weight
     suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
-    parts.extend(cap_parts)
+    # If cap applied and fully blocked an increase (no net change), override explanation.
+    if (
+        suggested_weight == rounded_current
+        and pre_cap_weight != rounded_current
+        and effective_multiplier > 1.0
+    ):
+        parts = [
+            f"RPE {rpe_for_text} — below target. "
+            f"Attempted increase to {pre_cap_weight:g}kg. "
+            f"Capped at 90% estimated 1RM. Maintaining {rounded_current:g}kg."
+        ]
+    elif suggested_weight != pre_cap_weight:
+        parts.append(
+            f"Attempted change to {pre_cap_weight:g}kg, capped at 90% estimated 1RM."
+        )
+        parts.extend(cap_parts)
+    else:
+        parts.extend(cap_parts)
     parts.append(" | Rule-based suggestion.")
     # Final rounding uses compound/isolation increments.
     suggested_weight = _round_training_weight(suggested_weight, is_compound)

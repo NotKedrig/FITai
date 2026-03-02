@@ -12,12 +12,14 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthContext } from '../../context/AuthContext';
+import { WorkoutContext } from '../../context/WorkoutContext';
 import * as exercisesApi from '../../api/exercises';
 
 export default function ExercisePickerScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { token } = useContext(AuthContext);
+  const { addExercise } = useContext(WorkoutContext);
 
   const [exercises, setExercises] = useState([]);
   const [search, setSearch] = useState('');
@@ -62,7 +64,8 @@ export default function ExercisePickerScreen() {
   }, [exercises, search]);
 
   const handleSelectExercise = (exercise) => {
-    navigation.navigate('LogSet', { exercise });
+    addExercise(exercise);
+    navigation.goBack();
   };
 
   const renderExerciseItem = ({ item }) => {

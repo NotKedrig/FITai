@@ -31,6 +31,27 @@ class SetRepository(BaseRepository[Set]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_sets_for_workout_and_user(
+        self, workout_id: UUID, user_id: UUID
+    ) -> list[Set]:
+        """
+        Get all sets for a specific workout and user.
+
+        Args:
+            workout_id: Workout UUID
+            user_id: User UUID
+
+        Returns:
+            List of set instances ordered by set_number
+        """
+        stmt = (
+            select(Set)
+            .where(Set.workout_id == workout_id, Set.user_id == user_id)
+            .order_by(Set.set_number)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_recent_sets_for_exercise(
         self, user_id: UUID, exercise_id: UUID, limit: int = 30
     ) -> list[Set]:

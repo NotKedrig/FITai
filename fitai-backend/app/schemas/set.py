@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.schemas.recommendation import RecommendationResponse
+from app.schemas.exercise import ExerciseResponse
 
 
 class SetCreate(BaseModel):
@@ -41,3 +42,22 @@ class SetWithRecommendation(BaseModel):
 
     set: SetResponse
     recommendation: RecommendationResponse | None = None
+
+
+class WorkoutExerciseSetItem(BaseModel):
+    """Slimmed-down set info for workout grouping."""
+
+    id: UUID
+    set_number: int
+    weight_kg: float
+    reps: int
+    rpe: float | None
+    is_warmup: bool
+    logged_at: datetime
+
+
+class WorkoutExerciseGroup(BaseModel):
+    """Grouped sets for a workout by exercise."""
+
+    exercise: ExerciseResponse
+    sets: list[WorkoutExerciseSetItem]

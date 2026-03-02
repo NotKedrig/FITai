@@ -25,3 +25,11 @@ export async function endWorkout(token, workoutId) {
   });
 }
 
+export async function getWorkoutSets(token, workoutId) {
+  return apiRequest(`/workouts/${workoutId}/sets`, {
+    method: 'GET',
+    token,
+  });
+}
+
+

@@ -7,7 +7,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.workout import Workout
+from app.models.exercise import Exercise
 from app.repositories.workout_repo import WorkoutRepository
+from app.repositories.set_repo import SetRepository
+from app.schemas.set import WorkoutExerciseGroup, WorkoutExerciseSetItem
 from app.schemas.workout import WorkoutCreate, WorkoutUpdate
 
 
@@ -171,3 +174,70 @@ async def update_workout(
         await db.refresh(updated)
         return updated
     return workout
+
+
+async def get_workout_sets_grouped(
+    workout_id: UUID, user_id: UUID, db: AsyncSession
+) -> list[WorkoutExerciseGroup]:
+    """
+    Get all sets for a workout grouped by exercise for the current user.
+
+    Raises:
+        HTTPException 404 if workout not found, 403 if not owned by user.
+    """
+    # Ensure workout exists and belongs to user.
+    workout_repo = WorkoutRepository(db)
+    workout = await workout_repo.get(workout_id)
+    if workout is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workout not found",
+        )
+    if workout.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to view this workout",
+        )
+
+    set_repo = SetRepository(db)
+    sets = await set_repo.get_sets_for_workout_and_user(workout_id, user_id)
+    if not sets:
+        return []
+
+    # Fetch all exercises referenced by these sets.
+    exercise_ids = {s.exercise_id for s in sets}
+    if not exercise_ids:
+        return []
+
+    stmt = select(Exercise).where(Exercise.id.in_(list(exercise_ids)))
+    result = await db.execute(stmt)
+    exercises = list(result.scalars().all())
+    exercise_map = {ex.id: ex for ex in exercises}
+
+    grouped: dict[UUID, WorkoutExerciseGroup] = {}
+    for s in sets:
+        ex = exercise_map.get(s.exercise_id)
+        if ex is None:
+            continue
+        if s.exercise_id not in grouped:
+            grouped[s.exercise_id] = WorkoutExerciseGroup(
+                exercise=ex,  # ExerciseResponse will be built by Pydantic from attributes
+                sets=[],
+            )
+        grouped[s.exercise_id].sets.append(
+            WorkoutExerciseSetItem(
+                id=s.id,
+                set_number=s.set_number,
+                weight_kg=float(s.weight_kg),
+                reps=s.reps,
+                rpe=float(s.rpe) if s.rpe is not None else None,
+                is_warmup=s.is_warmup,
+                logged_at=s.logged_at,
+            )
+        )
+
+    # Ensure sets are ordered by set_number within each group.
+    for group in grouped.values():
+        group.sets.sort(key=lambda item: item.set_number)
+
+    return list(grouped.values())

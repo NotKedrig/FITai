@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { AuthContext } from '../../context/AuthContext';
+import { WorkoutContext } from '../../context/WorkoutContext';
 import * as workoutsApi from '../../api/workouts';
 
 function formatGreetingName(user) {
@@ -62,10 +63,15 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { token, user, logout } = useContext(AuthContext);
+  const { restoreWorkout } = useContext(WorkoutContext);
   const [workouts, setWorkouts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [activeWorkout, setActiveWorkout] = useState(null);
+  const [resumeError, setResumeError] = useState(null);
+  const [isResuming, setIsResuming] = useState(false);
+  const [isEndingActive, setIsEndingActive] = useState(false);
 
   const loadWorkouts = useCallback(
     async (options = { refreshing: false }) => {
@@ -85,6 +91,8 @@ export default function HomeScreen() {
           .slice()
           .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
         setWorkouts(sorted.slice(0, 5));
+        const inProgress = sorted.find((w) => !w.ended_at) || null;
+        setActiveWorkout(inProgress);
       } catch (err) {
         setError(err.message || 'Failed to load workouts.');
       } finally {
@@ -102,6 +110,39 @@ export default function HomeScreen() {
   const onRefresh = useCallback(() => {
     loadWorkouts({ refreshing: true });
   }, [loadWorkouts]);
+
+  const handleResumeActiveWorkout = useCallback(async () => {
+    if (!token || !activeWorkout) {
+      return;
+    }
+    setIsResuming(true);
+    setResumeError(null);
+    try {
+      const groups = await workoutsApi.getWorkoutSets(token, activeWorkout.id);
+      restoreWorkout(activeWorkout, Array.isArray(groups) ? groups : []);
+      navigation.navigate('ActiveWorkout', { workout: activeWorkout });
+    } catch (err) {
+      setResumeError(err.message || 'Failed to resume workout.');
+    } finally {
+      setIsResuming(false);
+    }
+  }, [token, activeWorkout, restoreWorkout, navigation]);
+
+  const handleEndActiveWorkout = useCallback(async () => {
+    if (!token || !activeWorkout) {
+      return;
+    }
+    setIsEndingActive(true);
+    setResumeError(null);
+    try {
+      await workoutsApi.endWorkout(token, activeWorkout.id);
+      await loadWorkouts();
+    } catch (err) {
+      setResumeError(err.message || 'Failed to end workout.');
+    } finally {
+      setIsEndingActive(false);
+    }
+  }, [token, activeWorkout, loadWorkouts]);
 
   const renderWorkoutItem = ({ item }) => {
     return (
@@ -140,12 +181,61 @@ export default function HomeScreen() {
         </View>
 
         <TouchableOpacity
-          style={styles.primaryButton}
+          style={[
+            styles.primaryButton,
+            activeWorkout && styles.primaryButtonDisabled,
+          ]}
           activeOpacity={0.9}
-          onPress={() => navigation.navigate('StartWorkout')}
+          onPress={() => {
+            if (!activeWorkout) {
+              navigation.navigate('StartWorkout');
+            }
+          }}
+          disabled={!!activeWorkout}
         >
           <Text style={styles.primaryButtonText}>Start Workout</Text>
         </TouchableOpacity>
+        {activeWorkout && (
+          <Text style={styles.disabledHintText}>
+            Finish your active workout first.
+          </Text>
+        )}
+
+        {activeWorkout && (
+          <View style={styles.resumeBanner}>
+            <Text style={styles.resumeTitle}>Workout In Progress</Text>
+            <Text style={styles.resumeSubtitle}>{activeWorkout.name}</Text>
+            {resumeError && (
+              <Text style={styles.resumeErrorText}>{resumeError}</Text>
+            )}
+            <View style={styles.resumeButtonsRow}>
+              <TouchableOpacity
+                style={styles.resumeButton}
+                activeOpacity={0.9}
+                onPress={handleResumeActiveWorkout}
+                disabled={isResuming || isEndingActive}
+              >
+                {isResuming ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.resumeButtonText}>Resume</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.endBannerButton}
+                activeOpacity={0.9}
+                onPress={handleEndActiveWorkout}
+                disabled={isResuming || isEndingActive}
+              >
+                {isEndingActive ? (
+                  <ActivityIndicator size="small" color="#FF4D4D" />
+                ) : (
+                  <Text style={styles.endBannerButtonText}>End</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Workouts</Text>
@@ -250,10 +340,77 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 24,
   },
+  primaryButtonDisabled: {
+    opacity: 0.4,
+  },
   primaryButtonText: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  disabledHintText: {
+    marginTop: -12,
+    marginBottom: 16,
+    fontSize: 13,
+    color: '#cccccc',
+  },
+  resumeBanner: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#6C63FF',
+  },
+  resumeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  resumeSubtitle: {
+    fontSize: 14,
+    color: '#888888',
+    marginBottom: 8,
+  },
+  resumeErrorText: {
+    fontSize: 13,
+    color: '#ff9999',
+    marginBottom: 8,
+  },
+  resumeButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  resumeButton: {
+    flex: 1,
+    backgroundColor: '#6C63FF',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  resumeButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  endBannerButton: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#FF4D4D',
+  },
+  endBannerButtonText: {
+    color: '#FF4D4D',
+    fontSize: 14,
+    fontWeight: '600',
   },
   sectionHeader: {
     flexDirection: 'row',

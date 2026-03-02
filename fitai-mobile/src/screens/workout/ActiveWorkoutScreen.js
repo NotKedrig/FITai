@@ -5,6 +5,7 @@ import {
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -20,7 +21,16 @@ export default function ActiveWorkoutScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { token } = useContext(AuthContext);
-  const { workout, sets, initWorkout, removeSet, clearWorkout } = useContext(WorkoutContext);
+  const {
+    workout,
+    exercises,
+    latestRecommendation,
+    isLogging,
+    initWorkout,
+    logSet,
+    removeSet,
+    clearWorkout,
+  } = useContext(WorkoutContext);
 
   const routeWorkout = route.params && route.params.workout ? route.params.workout : null;
 
@@ -28,12 +38,13 @@ export default function ActiveWorkoutScreen() {
   const [endError, setEndError] = useState(null);
   const [removeError, setRemoveError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [inputState, setInputState] = useState({});
 
   useEffect(() => {
-    if (routeWorkout) {
+    if (routeWorkout && (!workout || workout.id !== routeWorkout.id)) {
       initWorkout(routeWorkout);
     }
-  }, [routeWorkout, initWorkout]);
+  }, [routeWorkout, workout, initWorkout]);
 
   useEffect(() => {
     const startedAtString =
@@ -54,11 +65,30 @@ export default function ActiveWorkoutScreen() {
     return () => clearInterval(intervalId);
   }, [workout, routeWorkout]);
 
-  const latestRecommendation = useMemo(() => {
-    if (!sets || sets.length === 0) return null;
-    const last = sets[sets.length - 1];
-    return last.recommendation || null;
-  }, [sets]);
+  useEffect(() => {
+    setInputState((current) => {
+      const next = { ...current };
+      exercises.forEach((block) => {
+        const id = block.exercise && block.exercise.id;
+        if (!id) return;
+        if (!next[id]) {
+          next[id] = {
+            weight:
+              latestRecommendation && latestRecommendation.suggested_weight_kg != null
+                ? String(latestRecommendation.suggested_weight_kg)
+                : '',
+            reps:
+              latestRecommendation && latestRecommendation.suggested_reps != null
+                ? String(latestRecommendation.suggested_reps)
+                : '',
+            rpe: '',
+            isWarmup: false,
+          };
+        }
+      });
+      return next;
+    });
+  }, [exercises, latestRecommendation]);
 
   const formattedTimer = useMemo(() => {
     const minutes = Math.floor(elapsedSeconds / 60);
@@ -107,41 +137,220 @@ export default function ActiveWorkoutScreen() {
       setRemoveError(error.message || 'Failed to delete set.');
     }
   };
+  const handleChangeInput = (exerciseId, field, value) => {
+    setInputState((current) => ({
+      ...current,
+      [exerciseId]: {
+        ...(current[exerciseId] || {}),
+        [field]: value,
+      },
+    }));
+  };
 
-  const renderSetItem = ({ item }) => {
-    const set = item.set;
-    const exerciseName = set.exercise_name || item.exercise_name || 'Exercise';
-    const labelParts = [];
-    if (set.is_warmup) {
-      labelParts.push('Warmup');
-    } else {
-      labelParts.push(`${set.weight_kg}kg x ${set.reps}`);
-      if (set.rpe != null) {
-        labelParts.push(`@ RPE ${set.rpe}`);
-      }
+  const handleToggleWarmup = (exerciseId) => {
+    setInputState((current) => {
+      const prev = current[exerciseId] || {
+        weight: '',
+        reps: '',
+        rpe: '',
+        isWarmup: false,
+      };
+      const nextIsWarmup = !prev.isWarmup;
+      return {
+        ...current,
+        [exerciseId]: {
+          weight: nextIsWarmup ? '' : prev.weight,
+          reps: nextIsWarmup ? '' : prev.reps,
+          rpe: nextIsWarmup ? '' : prev.rpe,
+          isWarmup: nextIsWarmup,
+        },
+      };
+    });
+  };
+
+  const handleCompleteSet = async (exerciseId) => {
+    const state = inputState[exerciseId] || {};
+    const rawWeight = state.weight || '';
+    const rawReps = state.reps || '';
+    const rawRpe = state.rpe || '';
+    const isWarmup = !!state.isWarmup;
+
+    if (!rawWeight.trim() || !rawReps.trim()) {
+      setRemoveError('Weight and reps are required.');
+      return;
     }
-    const label = labelParts.join(' ');
 
-    const rightActions = () => (
-      <TouchableOpacity
-        style={styles.deleteAction}
-        activeOpacity={0.8}
-        onPress={() => handleRemoveSet(set.id)}
-      >
-        <Text style={styles.deleteActionText}>Delete</Text>
-      </TouchableOpacity>
-    );
+    const weight = parseFloat(rawWeight.replace(',', '.'));
+    const reps = parseInt(rawReps, 10);
+    if (Number.isNaN(weight) || Number.isNaN(reps)) {
+      setRemoveError('Weight and reps must be numbers.');
+      return;
+    }
+
+    let rpe = null;
+    if (rawRpe.trim()) {
+      const parsedRpe = parseFloat(rawRpe.replace(',', '.'));
+      if (Number.isNaN(parsedRpe)) {
+        setRemoveError('RPE must be a number.');
+        return;
+      }
+      rpe = parsedRpe;
+    }
+
+    setRemoveError(null);
+    try {
+      await logSet(exerciseId, weight, reps, rpe, isWarmup);
+      setInputState((current) => ({
+        ...current,
+        [exerciseId]: {
+          weight:
+            !isWarmup &&
+            latestRecommendation &&
+            latestRecommendation.suggested_weight_kg != null
+              ? String(latestRecommendation.suggested_weight_kg)
+              : '',
+          reps:
+            !isWarmup &&
+            latestRecommendation &&
+            latestRecommendation.suggested_reps != null
+              ? String(latestRecommendation.suggested_reps)
+              : '',
+          rpe: '',
+          isWarmup: false,
+        },
+      }));
+    } catch (error) {
+      setRemoveError(error.message || 'Failed to log set.');
+    }
+  };
+
+  const renderExerciseBlock = ({ item }) => {
+    const block = item;
+    const exercise = block.exercise || {};
+    const exerciseId = exercise.id;
+    const completedSets = block.sets || [];
+    const state = (exerciseId && inputState[exerciseId]) || {
+      weight: '',
+      reps: '',
+      rpe: '',
+      isWarmup: false,
+    };
+    const nextSetNumber = completedSets.length + 1;
+
+    const renderCompletedSet = (entry) => {
+      const set = entry.set;
+      const rightActions = () => (
+        <TouchableOpacity
+          style={styles.deleteAction}
+          activeOpacity={0.8}
+          onPress={() => handleRemoveSet(set.id)}
+        >
+          <Text style={styles.deleteActionText}>Delete</Text>
+        </TouchableOpacity>
+      );
+
+      return (
+        <Swipeable key={set.id} renderRightActions={rightActions}>
+          <View
+            style={[
+              styles.completedRow,
+              set.is_warmup && styles.warmupRow,
+            ]}
+          >
+            <Text
+              style={[
+                styles.completedText,
+                set.is_warmup && styles.warmupText,
+              ]}
+            >
+              {`Set ${set.set_number} | ${set.weight_kg}kg x ${set.reps}${
+                set.rpe != null ? ` | RPE ${set.rpe}` : ''
+              }`}
+            </Text>
+            {set.is_warmup && (
+              <View style={styles.warmupBadge}>
+                <Text style={styles.warmupBadgeText}>W</Text>
+              </View>
+            )}
+          </View>
+        </Swipeable>
+      );
+    };
 
     return (
-      <Swipeable renderRightActions={rightActions}>
-        <View style={styles.setItem}>
-          <View style={styles.setItemHeader}>
-            <Text style={styles.setNumber}>Set {set.set_number}</Text>
-            <Text style={styles.setExerciseName}>{exerciseName}</Text>
-          </View>
-          <Text style={styles.setDetails}>{label}</Text>
+      <View style={styles.exerciseCard}>
+        <Text style={styles.exerciseName}>
+          {exercise.name || 'Exercise'}
+        </Text>
+        <Text style={styles.exerciseMeta}>
+          {(exercise.muscle_group || '').toString()}
+        </Text>
+
+        <View style={styles.setsContainer}>
+          {completedSets.map(renderCompletedSet)}
+
+          {exerciseId && (
+            <View style={styles.activeSetRow}>
+              <Text style={styles.activeSetNumber}>#{nextSetNumber}</Text>
+              <TextInput
+                style={styles.activeInput}
+                placeholder="kg"
+                placeholderTextColor="#666666"
+                keyboardType="numeric"
+                value={state.weight}
+                onChangeText={(text) =>
+                  handleChangeInput(exerciseId, 'weight', text)
+                }
+              />
+              <TextInput
+                style={styles.activeInput}
+                placeholder="Reps"
+                placeholderTextColor="#666666"
+                keyboardType="numeric"
+                value={state.reps}
+                onChangeText={(text) =>
+                  handleChangeInput(exerciseId, 'reps', text)
+                }
+              />
+              <TextInput
+                style={styles.activeInput}
+                placeholder="RPE"
+                placeholderTextColor="#666666"
+                keyboardType="numeric"
+                value={state.rpe}
+                onChangeText={(text) =>
+                  handleChangeInput(exerciseId, 'rpe', text)
+                }
+              />
+              <TouchableOpacity
+                style={[
+                  styles.warmupToggle,
+                  state.isWarmup && styles.warmupToggleActive,
+                ]}
+                onPress={() => handleToggleWarmup(exerciseId)}
+              >
+                <Text style={styles.warmupToggleText}>W</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.completeButton,
+                  (isLogging || !state.weight || !state.reps) &&
+                    styles.completeButtonDisabled,
+                ]}
+                activeOpacity={0.9}
+                onPress={() => handleCompleteSet(exerciseId)}
+                disabled={isLogging || !state.weight || !state.reps}
+              >
+                {isLogging ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.completeButtonText}>✓</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
-      </Swipeable>
+      </View>
     );
   };
 
@@ -193,9 +402,13 @@ export default function ActiveWorkoutScreen() {
           ) : null}
 
           <FlatList
-            data={sets}
-            keyExtractor={(item) => String(item.set.id)}
-            renderItem={renderSetItem}
+            data={exercises}
+            keyExtractor={(item) =>
+              String(item.exercise && item.exercise.id
+                ? item.exercise.id
+                : Math.random())
+            }
+            renderItem={renderExerciseBlock}
             contentContainerStyle={styles.listContent}
           />
         </View>
@@ -308,31 +521,116 @@ const styles = StyleSheet.create({
   listContent: {
     paddingBottom: 16,
   },
-  setItem: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
+  exerciseCard: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 16,
+    padding: 16,
+    marginVertical: 8,
   },
-  setItemHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  setNumber: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#cccccc',
-  },
-  setExerciseName: {
-    fontSize: 14,
+  exerciseName: {
+    fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
   },
-  setDetails: {
+  exerciseMeta: {
+    marginTop: 4,
     fontSize: 13,
-    color: '#dddddd',
+    color: '#888888',
+  },
+  setsContainer: {
+    marginTop: 12,
+  },
+  completedRow: {
+    backgroundColor: '#2A2A2A',
+    padding: 12,
+    borderRadius: 10,
+    marginVertical: 4,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  completedText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  warmupRow: {
+    backgroundColor: '#232323',
+  },
+  warmupText: {
+    color: '#AAAAAA',
+  },
+  warmupBadge: {
+    backgroundColor: '#FFD60A',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  warmupBadgeText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  activeSetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  activeSetNumber: {
+    fontSize: 13,
+    color: '#ffffff',
+    marginRight: 8,
+  },
+  activeInput: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    color: '#ffffff',
+    backgroundColor: '#111111',
+    fontSize: 13,
+    marginHorizontal: 4,
+    textAlign: 'center',
+  },
+  warmupToggle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#555555',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 4,
+  },
+  warmupToggleActive: {
+    backgroundColor: '#444444',
+    borderColor: '#ffffff',
+  },
+  warmupToggleText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  completeButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
+    backgroundColor: '#4CAF50',
+  },
+  completeButtonDisabled: {
+    backgroundColor: '#333333',
+  },
+  completeButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   deleteAction: {
     backgroundColor: '#FF4B4B',
@@ -368,11 +666,18 @@ const styles = StyleSheet.create({
     borderTopColor: '#111111',
   },
   addExerciseButton: {
-    backgroundColor: '#6C63FF',
+    backgroundColor: '#2C2C2E',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
     marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
+    shadowColor: '#000000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 3,
+    elevation: 2,
   },
   addExerciseButtonText: {
     color: '#ffffff',
@@ -380,16 +685,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   endButton: {
-    backgroundColor: '#FF4B4B',
+    backgroundColor: '#1C1C1E',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
   },
   endButtonDisabled: {
     opacity: 0.7,
   },
   endButtonText: {
-    color: '#ffffff',
+    color: '#FF4D4D',
     fontSize: 16,
     fontWeight: '700',
   },
