@@ -89,36 +89,47 @@ def get_rule_based_recommendation(
         parts.append(" | Rule-based suggestion.")
         return (suggested_weight, suggested_reps, " ".join(parts))
 
+    # Detect whether we should treat this as a fresh-state projection.
+    # In fresh state (e.g. immediately after resume), progression must depend
+    # only on the last set itself, not historical fatigue/trend signals.
+    current_len = len(ctx.current_session_sets) if ctx.current_session_sets else 0
+    is_fresh_state = current_len <= 1 or ctx.total_sets_today == 1
+
     # ── RULE 1: Fatigue detection (signals only; application happens later) ──
-    fatigue_signals: list[str] = []
+    if not is_fresh_state:
+        fatigue_signals: list[str] = []
 
-    # Signal 1: Rep drop (2+ sets, drop >= 3)
-    if len(ctx.current_session_sets) >= 2:
-        prev_reps = ctx.current_session_sets[-2].get("reps")
-        if prev_reps is not None and (last_reps - prev_reps) <= -3:
-            fatigue_signals.append(SIGNAL_REP_DROP)
+        # Signal 1: Rep drop (2+ sets, drop >= 3)
+        if len(ctx.current_session_sets) >= 2:
+            prev_reps = ctx.current_session_sets[-2].get("reps")
+            if prev_reps is not None and (last_reps - prev_reps) <= -3:
+                fatigue_signals.append(SIGNAL_REP_DROP)
 
-    # Signal 2: RPE spike
-    if last_rpe is not None and last_rpe >= 9:
-        fatigue_signals.append(SIGNAL_RPE_SPIKE)
+        # Signal 2: RPE spike
+        if last_rpe is not None and last_rpe >= 9:
+            fatigue_signals.append(SIGNAL_RPE_SPIKE)
 
-    # Signal 3: Excessive volume
-    if ctx.total_sets_today >= 18:
-        fatigue_signals.append(SIGNAL_EXCESSIVE_VOLUME)
+        # Signal 3: Excessive volume
+        if ctx.total_sets_today >= 18:
+            fatigue_signals.append(SIGNAL_EXCESSIVE_VOLUME)
 
-    # Signal 4 (duration) is an exclusive fallback. It only contributes to the
-    # fatigue score when Signals 1–3 all score 0. It can never combine with
-    # other signals to produce hard fatigue.
-    if (
-        len(fatigue_signals) == 0
-        and ctx.workout_duration_minutes is not None
-        and ctx.workout_duration_minutes > 120
-    ):
-        fatigue_signals.append(SIGNAL_DURATION)
+        # Signal 4 (duration) is an exclusive fallback. It only contributes to the
+        # fatigue score when Signals 1–3 all score 0. It can never combine with
+        # other signals to produce hard fatigue.
+        if (
+            len(fatigue_signals) == 0
+            and ctx.workout_duration_minutes is not None
+            and ctx.workout_duration_minutes > 120
+        ):
+            fatigue_signals.append(SIGNAL_DURATION)
 
-    fatigue_count = len(fatigue_signals)
-    hard_fatigue = fatigue_count >= 2 and last_rpe is not None and last_rpe >= 8.5
-    soft_fatigue = fatigue_count >= 1 and not hard_fatigue
+        fatigue_count = len(fatigue_signals)
+        hard_fatigue = fatigue_count >= 2 and last_rpe is not None and last_rpe >= 8.5
+        soft_fatigue = fatigue_count >= 1 and not hard_fatigue
+    else:
+        fatigue_signals = []
+        hard_fatigue = False
+        soft_fatigue = False
 
     # ── RULE 2: RIR-based projection toward target RPE 8 ─────────────────────
     target_rpe = 8.0
@@ -235,7 +246,12 @@ def get_rule_based_recommendation(
         parts.append(f"Minimum +{delta:g}kg applied to ensure meaningful progression.")
 
     # ── RULE 4: Session trend (exercise-scoped, high-RPE only) ───────────────
-    if len(ctx.current_session_sets) >= 2 and last_rpe is not None and last_rpe >= 8.5:
+    if (
+        not is_fresh_state
+        and len(ctx.current_session_sets) >= 2
+        and last_rpe is not None
+        and last_rpe >= 8.5
+    ):
         current_set = ctx.current_session_sets[-1]
         prev = ctx.current_session_sets[-2]
         current_ex_id = current_set.get("exercise_id")
@@ -258,7 +274,7 @@ def get_rule_based_recommendation(
                 )
 
     # ── RULE 5: Recent session comparison (exercise-scoped) ─────────────────
-    if ctx.recent_sessions and ctx.current_session_sets:
+    if not is_fresh_state and ctx.recent_sessions and ctx.current_session_sets:
         current_ex_id = ctx.current_session_sets[-1].get("exercise_id")
         prior_sets = ctx.recent_sessions[0].get("sets", [])
         if current_ex_id is not None and prior_sets:
