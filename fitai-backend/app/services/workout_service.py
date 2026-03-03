@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.workout import Workout
@@ -204,7 +205,7 @@ async def get_workout_sets_grouped(
     if not sets:
         return []
 
-    # Fetch all exercises referenced by these sets.
+    # Fetch all exercises referenced by these sets in a single query.
     exercise_ids = {s.exercise_id for s in sets}
     if not exercise_ids:
         return []
@@ -214,30 +215,36 @@ async def get_workout_sets_grouped(
     exercises = list(result.scalars().all())
     exercise_map = {ex.id: ex for ex in exercises}
 
-    grouped: dict[UUID, WorkoutExerciseGroup] = {}
+    # Build pure dictionary structures for safe serialization.
+    grouped: dict[UUID, dict] = {}
     for s in sets:
         ex = exercise_map.get(s.exercise_id)
         if ex is None:
             continue
-        if s.exercise_id not in grouped:
-            grouped[s.exercise_id] = WorkoutExerciseGroup(
-                exercise=ex,  # ExerciseResponse will be built by Pydantic from attributes
-                sets=[],
-            )
-        grouped[s.exercise_id].sets.append(
-            WorkoutExerciseSetItem(
-                id=s.id,
-                set_number=s.set_number,
-                weight_kg=float(s.weight_kg),
-                reps=s.reps,
-                rpe=float(s.rpe) if s.rpe is not None else None,
-                is_warmup=s.is_warmup,
-                logged_at=s.logged_at,
-            )
-        )
 
-    # Ensure sets are ordered by set_number within each group.
-    for group in grouped.values():
-        group.sets.sort(key=lambda item: item.set_number)
+        if ex.id not in grouped:
+            grouped[ex.id] = {
+                "exercise": {
+                    "id": ex.id,
+                    "name": ex.name,
+                    "muscle_group": ex.muscle_group,
+                    "equipment_type": ex.equipment_type,
+                    "is_compound": ex.is_compound,
+                    "created_at": ex.created_at,
+                },
+                "sets": [],
+            }
+
+        grouped[ex.id]["sets"].append(
+            {
+                "id": s.id,
+                "set_number": s.set_number,
+                "weight_kg": float(s.weight_kg),
+                "reps": s.reps,
+                "rpe": float(s.rpe) if s.rpe is not None else None,
+                "is_warmup": s.is_warmup,
+                "logged_at": s.logged_at,
+            }
+        )
 
     return list(grouped.values())

@@ -42,12 +42,12 @@ class SetRepository(BaseRepository[Set]):
             user_id: User UUID
 
         Returns:
-            List of set instances ordered by set_number
+            List of set instances ordered by exercise_id then set_number
         """
         stmt = (
             select(Set)
             .where(Set.workout_id == workout_id, Set.user_id == user_id)
-            .order_by(Set.set_number)
+            .order_by(Set.exercise_id, Set.set_number)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
