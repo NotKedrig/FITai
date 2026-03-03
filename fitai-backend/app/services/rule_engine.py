@@ -27,17 +27,17 @@ def _round_weight(weight_kg: float) -> float:
 def _round_training_weight(weight_kg: float, is_compound: bool) -> float:
     """Round training weight with compound vs isolation distinction.
 
-    Compound movements round to the nearest 2.5 kg.
-    Isolation movements round to the nearest 1.25 kg.
+    Compound movements round to the nearest 5 kg.
+    Isolation movements round to the nearest 2.5 kg.
     """
     clamped = max(0.0, weight_kg)
-    increment = 2.5 if is_compound else 1.25
+    increment = 5.0 if is_compound else 2.5
     return round(clamped / increment) * increment
 
 
 def _get_delta(is_compound: bool) -> float:
-    """Return weight delta: 2.5 for compound, 1.25 for isolation."""
-    return 2.5 if is_compound else 1.25
+    """Return weight delta: 5.0 for compound, 2.5 for isolation."""
+    return 5.0 if is_compound else 2.5
 
 
 def _apply_1rm_cap(ctx: WorkoutContext, weight: float) -> tuple[float, list[str]]:
@@ -65,10 +65,10 @@ def get_rule_based_recommendation(
 
     New progression logic:
       - Target RPE is 8, with a working band of 7.5–8.5.
-      - A multiplier table maps discrete RPE values to % changes.
+      - Discrete RPE → multiplier mapping pulls loads toward RPE 8.
       - Fatigue signals are detected first, but applied AFTER the multiplier:
-          * Hard fatigue (2+ signals): always reduce by a fixed delta.
-          * Soft fatigue (1 signal): cap increases (multiplier > 1.0) to maintain.
+          * Hard fatigue (2+ signals at RPE >= 8.5): always reduce by a fixed delta.
+          * Soft fatigue (any non-zero signals without hard fatigue): can cap increases.
     """
     is_compound = ctx.is_compound
     parts: list[str] = []
@@ -117,41 +117,98 @@ def get_rule_based_recommendation(
         fatigue_signals.append(SIGNAL_DURATION)
 
     fatigue_count = len(fatigue_signals)
-    soft_fatigue = fatigue_count == 1
-    hard_fatigue = fatigue_count >= 2
+    hard_fatigue = fatigue_count >= 2 and last_rpe is not None and last_rpe >= 8.5
+    soft_fatigue = fatigue_count >= 1 and not hard_fatigue
 
-    # ── RULE 2: RPE-based multiplier ─────────────────────────────────────────
-    target_rpe = 8
-    rpe_deficit = target_rpe - float(last_rpe)
-    _ = rpe_deficit  # kept for potential future tuning
+    # ── RULE 2: RIR-based projection toward target RPE 8 ─────────────────────
+    target_rpe = 8.0
+    target_rir = 10.0 - target_rpe  # = 2
 
-    rpe_for_text = int(last_rpe) if float(last_rpe).is_integer() else last_rpe
-
-    if last_rpe <= 4:
-        multiplier = 1.15
+    # Estimate reps to failure at current load using RIR model.
+    rir = 10.0 - float(last_rpe)
+    est_failure_reps = last_reps + rir
+    if est_failure_reps <= 0:
+        # Degenerate case: fall back to maintaining load.
+        suggested_weight = _round_training_weight(last_weight_kg, is_compound)
+        suggested_reps = last_reps
         parts.append(
-            f"RPE {rpe_for_text} — significantly underloaded, increasing weight by 15%."
+            "Projected load to target RPE 8 using RIR model, "
+            "but failure estimate was invalid — maintaining load."
         )
-    elif last_rpe == 5:
-        multiplier = 1.10
-        parts.append(f"RPE {rpe_for_text} — underloaded, increasing by 10%.")
-    elif last_rpe == 6:
-        multiplier = 1.05
-        parts.append(f"RPE {rpe_for_text} — below target, increasing by 5%.")
-    elif last_rpe == 7:
-        multiplier = 1.025
-        parts.append(f"RPE {rpe_for_text} — approaching target, small increase.")
-    elif last_rpe == 8:
-        multiplier = 1.0
-        parts.append(f"RPE {rpe_for_text} — on target. Maintaining load.")
-    elif last_rpe == 9:
-        multiplier = 0.975
-        parts.append(f"RPE {rpe_for_text} — above target, slight reduction.")
-    else:  # last_rpe >= 10
-        multiplier = 0.95
-        parts.append(f"RPE {rpe_for_text} — too close to failure, reducing load.")
+        suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
+        parts.extend(cap_parts)
+        parts.append(" | Rule-based suggestion.")
+        return (suggested_weight, suggested_reps, " ".join(parts))
 
-    # ── RULE 3: Apply fatigue after multiplier ───────────────────────────────
+    desired_failure_reps = last_reps + target_rir
+    intensity_ratio = desired_failure_reps / est_failure_reps
+    if intensity_ratio <= 0:
+        # Degenerate case: fall back to maintaining load.
+        suggested_weight = _round_training_weight(last_weight_kg, is_compound)
+        suggested_reps = last_reps
+        parts.append(
+            "Projected load to target RPE 8 using RIR model, "
+            "but intensity ratio was invalid — maintaining load."
+        )
+        suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
+        parts.extend(cap_parts)
+        parts.append(" | Rule-based suggestion.")
+        return (suggested_weight, suggested_reps, " ".join(parts))
+
+    # Base projection from current RPE toward target RPE 8.
+    projected_weight_raw = last_weight_kg / intensity_ratio
+    change_pct_raw = (projected_weight_raw - last_weight_kg) / last_weight_kg if last_weight_kg > 0 else 0.0
+
+    clamp_note: str | None = None
+    increase_limited_by_soft_fatigue = False
+
+    if change_pct_raw > 0:
+        # Clamp maximum increase using dynamic cap scaling based on RPE deficit.
+        rpe_deficit = target_rpe - float(last_rpe)
+        if rpe_deficit >= 4:
+            max_inc = 0.225
+        elif rpe_deficit >= 3:
+            max_inc = 0.20
+        elif rpe_deficit >= 2:
+            max_inc = 0.175
+        elif rpe_deficit >= 1:
+            max_inc = 0.15
+        else:
+            max_inc = 0.10
+
+        if soft_fatigue and float(last_rpe) >= 8.0:
+            max_inc = min(max_inc, 0.075)
+            increase_limited_by_soft_fatigue = True
+
+        if change_pct_raw > max_inc:
+            change_pct = max_inc
+            clamp_note = f"Increase clamped to {max_inc * 100:.1f}% for safety."
+        else:
+            change_pct = change_pct_raw
+    elif change_pct_raw < 0:
+        # Clamp maximum decrease (shared for compound/isolation).
+        max_dec = 0.10
+        if change_pct_raw < -max_dec:
+            change_pct = -max_dec
+            clamp_note = "Decrease clamped to 10.0% for safety."
+        else:
+            change_pct = change_pct_raw
+    else:
+        change_pct = 0.0
+
+    projected_weight = last_weight_kg * (1.0 + change_pct)
+
+    # Explanation for projection.
+    parts.append(
+        f"Projected load to target RPE 8 using RIR model "
+        f"(estimated failure reps ≈ {est_failure_reps:.1f})."
+    )
+    if clamp_note:
+        parts.append(clamp_note)
+    if increase_limited_by_soft_fatigue and change_pct > 0:
+        parts.append("Soft fatigue detected — projected increase limited to 7.5%.")
+
+    # ── RULE 3: Apply fatigue after projection (hard fatigue overrides) ──────
     if hard_fatigue:
         # Override multiplier: always reduce by a fixed delta based on exercise type.
         delta = _get_delta(is_compound)
@@ -164,88 +221,75 @@ def get_rule_based_recommendation(
         parts.append(" | Rule-based suggestion.")
         return (suggested_weight, suggested_reps, " ".join(parts))
 
-    # Soft fatigue: always record the signal, and cap increases if needed.
-    effective_multiplier = multiplier
-    if soft_fatigue:
-        parts.append(fatigue_signals[0])
-        if effective_multiplier > 1.0:
-            effective_multiplier = 1.0
-            parts.append("— capping at maintain due to fatigue.")
-
-    # Compute base suggestion from effective multiplier.
-    suggested_weight = last_weight_kg * effective_multiplier
-    suggested_weight = _round_training_weight(suggested_weight, is_compound)
+    # Compute base suggestion from projected weight (already clamped).
+    suggested_weight = _round_training_weight(projected_weight, is_compound)
     suggested_reps = last_reps
 
     # ── Minimum effective change to avoid rounding collapse ──────────────────
     rounded_current = _round_training_weight(last_weight_kg, is_compound)
     delta = _get_delta(is_compound)
-    if effective_multiplier > 1.0 and suggested_weight == rounded_current:
+    if last_rpe < 7.5 and projected_weight > last_weight_kg and suggested_weight == rounded_current:
         # Force a minimum increase.
         forced_weight = last_weight_kg + delta
         suggested_weight = _round_training_weight(forced_weight, is_compound)
-        parts.append(f"Minimum +{delta:g}kg applied.")
-    elif effective_multiplier < 1.0 and suggested_weight == rounded_current:
-        # Force a minimum reduction.
-        forced_weight = last_weight_kg - delta
-        suggested_weight = _round_training_weight(forced_weight, is_compound)
-        parts.append(f"Minimum -{delta:g}kg applied.")
+        parts.append(f"Minimum +{delta:g}kg applied to ensure meaningful progression.")
 
-    # ── RULE 3: Session trend (only if 0 or soft fatigue) ────────────────────
-    increase_suppressed = False
-
-    if len(ctx.current_session_sets) >= 2:
+    # ── RULE 4: Session trend (exercise-scoped, high-RPE only) ───────────────
+    if len(ctx.current_session_sets) >= 2 and last_rpe is not None and last_rpe >= 8.5:
+        current_set = ctx.current_session_sets[-1]
         prev = ctx.current_session_sets[-2]
-        prev_reps = prev.get("reps")
-        prev_weight = prev.get("weight_kg")
-        rep_drop = (last_reps - prev_reps) if prev_reps is not None else 0
-        weight_dropped = (
-            prev_weight is not None and last_weight_kg < float(prev_weight)
-        )
-        trend_declining = rep_drop <= -2 or weight_dropped
-        if trend_declining and last_rpe is not None and last_rpe <= 6:
-            increase_suppressed = True
-            suggested_weight = _round_training_weight(last_weight_kg, is_compound)
-            suggested_reps = last_reps
-            parts.append("Session trend declining — suppressing increase.")
-            parts.append(f"RPE {int(last_rpe)} noted but overridden.")
-
-    # ── RULE 4: Recent session comparison ───────────────────────────────────
-    if not increase_suppressed and ctx.recent_sessions:
-        prior_sets = ctx.recent_sessions[0].get("sets", [])
-        if prior_sets:
-            best_prior_weight = max(
-                float(s.get("weight_kg", 0)) for s in prior_sets
+        current_ex_id = current_set.get("exercise_id")
+        prev_ex_id = prev.get("exercise_id")
+        if current_ex_id is not None and current_ex_id == prev_ex_id:
+            prev_reps = prev.get("reps")
+            prev_weight = prev.get("weight_kg")
+            same_weight = (
+                prev_weight is not None and float(prev_weight) == float(last_weight_kg)
             )
-            if last_weight_kg < best_prior_weight and last_rpe is not None and last_rpe <= 6:
-                increase_suppressed = True
+            rep_dropped = (
+                prev_reps is not None and last_reps < int(prev_reps)
+            )
+            if same_weight and rep_dropped and suggested_weight > last_weight_kg:
                 suggested_weight = _round_training_weight(last_weight_kg, is_compound)
                 suggested_reps = last_reps
                 parts.append(
-                    "Current weight below prior session best — suppressing increase."
+                    "Same-exercise performance dropped at the same weight with high RPE — "
+                    "suppressing further increases."
                 )
 
-    # ── RULE 5: 1RM cap ─────────────────────────────────────────────────────
+    # ── RULE 5: Recent session comparison (exercise-scoped) ─────────────────
+    if ctx.recent_sessions and ctx.current_session_sets:
+        current_ex_id = ctx.current_session_sets[-1].get("exercise_id")
+        prior_sets = ctx.recent_sessions[0].get("sets", [])
+        if current_ex_id is not None and prior_sets:
+            same_exercise_sets = [
+                s for s in prior_sets if s.get("exercise_id") == current_ex_id
+            ]
+            if same_exercise_sets:
+                best_prior_weight = max(
+                    float(s.get("weight_kg", 0)) for s in same_exercise_sets
+                )
+                if (
+                    last_rpe is not None
+                    and last_rpe <= 6
+                    and last_weight_kg < best_prior_weight
+                ):
+                    target = max(suggested_weight, best_prior_weight)
+                    suggested_weight = _round_training_weight(target, is_compound)
+                    parts.append(
+                        "Below prior session best for this exercise at low RPE — "
+                        "pushing back toward previous best."
+                    )
+
+    # ── RULE 6: 1RM cap ─────────────────────────────────────────────────────
     pre_cap_weight = suggested_weight
     suggested_weight, cap_parts = _apply_1rm_cap(ctx, suggested_weight)
-    # If cap applied and fully blocked an increase (no net change), override explanation.
-    if (
-        suggested_weight == rounded_current
-        and pre_cap_weight != rounded_current
-        and effective_multiplier > 1.0
-    ):
-        parts = [
-            f"RPE {rpe_for_text} — below target. "
-            f"Attempted increase to {pre_cap_weight:g}kg. "
-            f"Capped at 90% estimated 1RM. Maintaining {rounded_current:g}kg."
-        ]
-    elif suggested_weight != pre_cap_weight:
+    # If cap applied, append concise, non-contradictory messaging.
+    if suggested_weight != pre_cap_weight:
         parts.append(
-            f"Attempted change to {pre_cap_weight:g}kg, capped at 90% estimated 1RM."
+            f"Projected change to {pre_cap_weight:g}kg was capped at 90% estimated 1RM."
         )
-        parts.extend(cap_parts)
-    else:
-        parts.extend(cap_parts)
+    parts.extend(cap_parts)
     parts.append(" | Rule-based suggestion.")
     # Final rounding uses compound/isolation increments.
     suggested_weight = _round_training_weight(suggested_weight, is_compound)
